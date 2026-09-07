@@ -20,3 +20,6 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Snapshot do migrator gerado ao rodar migrations no banco de testes
+src/infrastructure/persistence/migrations/.snapshot-*_test.json
