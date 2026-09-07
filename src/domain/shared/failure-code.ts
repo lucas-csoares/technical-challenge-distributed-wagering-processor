@@ -28,6 +28,8 @@ export enum FailureCode {
   ReferenceAmountMismatch = 'REFERENCE_AMOUNT_MISMATCH',
   /** Referência já revertida por uma operação do mesmo tipo. */
   ReferenceAlreadyReversed = 'REFERENCE_ALREADY_REVERSED',
+  /** A referência não apareceu antes de esgotar as tentativas do worker. */
+  ReferenceNotFound = 'REFERENCE_NOT_FOUND',
 }
 
 /**
