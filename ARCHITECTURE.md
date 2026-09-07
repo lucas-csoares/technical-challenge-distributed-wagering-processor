@@ -59,7 +59,7 @@ e um registro consolidado de trade-offs, limitações e decisões pendentes.
 
 O domínio é código puro: não importa NestJS, MikroORM, PostgreSQL nem SQS, e
 seus testes executam sem banco, container ou variável de conexão. Ele também não
-lê o relógio nem gera identificadores — datas e ids são fornecidos por quem
+lê o relógio nem gera identificadores, datas e ids são fornecidos por quem
 chama, o que mantém as regras determinísticas e testáveis.
 
 ---
@@ -98,7 +98,7 @@ Wager Message**.
 **Consume Wager Message** existe porque a entrada assíncrona tem preocupações
 que a síncrona não tem, e não porque o processamento financeiro seja diferente.
 Ele registra a mensagem na Inbox, deduplica por identidade de transporte,
-classifica o desfecho do consumo — processada, duplicata ou conflito de payload —
+classifica o desfecho do consumo, processada, duplicata ou conflito de payload,
 e abre a unidade transacional em que o núcleo financeiro é executado, de modo que
 o `ACK` só aconteça depois do commit. Nenhuma regra monetária é reimplementada
 ali: o componente orquestra a entrada e delega.
@@ -107,8 +107,8 @@ A **Application Layer** coordena casos de uso; ela não contém a aritmética
 monetária nem as invariantes financeiras, que pertencem ao domínio. Os
 **Financial Use Cases** respondem pela criação de wallet e pelo processamento de
 `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`, coordenando aggregate, ledger e
-persistência. **Financial Queries & Reconciliation** respondem pelas leituras —
-wallet, transações e paginação do ledger — e pela reconciliação entre o saldo
+persistência. **Financial Queries & Reconciliation** respondem pelas leituras,
+wallet, transações e paginação do ledger, e pela reconciliação entre o saldo
 materializado e o saldo reconstruído a partir dos lançamentos. **Publish Outbox**
 responde pela publicação dos eventos pendentes, e **Resolve Pending References**
 pelo reprocessamento das transações em `PENDING_REFERENCE`.
@@ -126,7 +126,7 @@ operação precisa ler ou escrever estado financeiro, ela pede um escopo ao
 o **Wallet Repository**, o **WagerTransaction Repository**, o **Ledger
 Repository**, o **Inbox Repository** e o **Outbox Repository**. A consequência
 arquitetural é a que importa: tudo o que pertence à mesma operação financeira
-compartilha a mesma transação SQL — a alteração da wallet, o estado da
+compartilha a mesma transação SQL, a alteração da wallet, o estado da
 transação, o lançamento no ledger e, quando a entrada é assíncrona, o registro
 da Inbox e os eventos da Outbox. A implementação concreta usa MikroORM sobre
 PostgreSQL, mas a aplicação depende da abstração, não do ORM.
@@ -143,7 +143,7 @@ a Outbox, as garantias de concorrência e as constraints de unicidade e de
 não-negatividade. O SQS não é a fonte final de consistência: a correção do
 sistema não repousa em estado de memória de nenhuma instância nem nas garantias
 de ordenação e deduplicação do broker, que são otimização. A unidade de
-concorrência é a `walletId`, serializada por *pessimistic locking* — o
+concorrência é a `walletId`, serializada por *pessimistic locking*, o
 detalhamento está em *Concorrência*.
 
 A **Inbox** é o mecanismo de deduplicação da entrada assíncrona. Cada mensagem
@@ -152,7 +152,7 @@ que impede que uma reentrega produza efeito financeiro de novo e permite
 identificar o caso em que a mesma identidade de transporte volta com um corpo
 diferente. Esse registro participa da mesma transação SQL da alteração
 financeira, do ledger e da Outbox. A entrada HTTP não passa pela Inbox: ali a
-identidade é a da própria operação, tratada pela idempotência financeira — ver
+identidade é a da própria operação, tratada pela idempotência financeira, ver
 *Idempotência*.
 
 A **Outbox** implementa o Transactional Outbox. O estado financeiro, o
@@ -170,7 +170,7 @@ apenas reagenda a mensagem com backoff. A semântica é **at-least-once**, não
 exactly-once: se o processo morrer entre o envio aceito pelo SQS e o commit que
 registra a publicação, a transação reverte e outro publisher enviará o mesmo
 evento novamente. O `eventId` é estável desde a transação financeira, então a
-duplicata é reconhecível pelo consumidor — ver *Outbox*.
+duplicata é reconhecível pelo consumidor, ver *Outbox*.
 
 O **Pending Reference Worker** cumpre o mesmo papel de agendador para **Resolve
 Pending References**, e é o caso de uso que faz o trabalho: ele seleciona as
@@ -184,7 +184,7 @@ A **DLQ** é alcançada pelo próprio SQS, não pela aplicação. O consumidor
 classifica o erro e decide apenas se confirma ou não a mensagem: uma rejeição de
 negócio é terminal e recebe `ACK`, porque reprocessá-la não mudaria o resultado;
 uma falha transitória e uma mensagem permanentemente inaproveitável não recebem
-`ACK`. A partir daí quem age é o broker — a mensagem volta pela visibilidade e,
+`ACK`. A partir daí quem age é o broker, a mensagem volta pela visibilidade e,
 esgotado o `maxReceiveCount`, a política de redrive de `wager-transactions.fifo`
 a encaminha para `wager-transactions-dlq.fifo`. A aplicação nunca publica
 diretamente na DLQ e não tem conhecimento imediato de que uma mensagem chegou
@@ -192,16 +192,16 @@ lá; quando precisa desse número, ela o consulta no broker.
 
 **Structured Logging**, **Prometheus Metrics** e **Health Checks** são
 responsabilidades operacionais transversais, e por isso aparecem fora do fluxo
-financeiro. Os caminhos relevantes — HTTP API, SQS Consumer e os workers de
-fundo — emitem logs estruturados com contexto de correlação, com os campos que
+financeiro. Os caminhos relevantes, HTTP API, SQS Consumer e os workers de
+fundo, emitem logs estruturados com contexto de correlação, com os campos que
 existirem em cada ponto. As métricas operacionais são registradas por meio de
 uma porta da aplicação e expostas em `GET /metrics`, cobrindo as famílias
-exigidas pelo desafio; a instrumentação vive onde o dado existe — nas bordas
+exigidas pelo desafio; a instrumentação vive onde o dado existe, nas bordas
 HTTP e SQS para o processamento de wagering, e nos próprios casos de uso de
 Publish Outbox e Resolve Pending References para lag, retries e desfechos. Os
 health checks separam liveness de readiness: `/health/live` responde sobre o
 processo e `/health/ready` sonda PostgreSQL e SQS. Nenhum desses componentes
-participa da correção financeira — detalhes em *Observabilidade* e *Health
+participa da correção financeira, detalhes em *Observabilidade* e *Health
 checks*.
 
 ### Boundaries
@@ -209,16 +209,16 @@ checks*.
 O desenho separa quatro camadas, e a direção das dependências é sempre para
 dentro:
 
-* **`application`** — `src/application`, com as portas de persistência, a
+* **`application`**, `src/application`, com as portas de persistência, a
   fronteira transacional, os casos de uso (`CreateWalletUseCase`,
   `ProcessWagerTransactionUseCase`, `ReconcileWalletUseCase`) e as queries de
   leitura. É o ponto em que HTTP e SQS convergem, e é independente de
   transporte: recebe comandos simples e não importa nada do NestJS.
   *(implementado)*
-* **`domain`** — `src/domain`, com `shared` (`Money`, erros e `FailureCode`),
+* **`domain`**, `src/domain`, com `shared` (`Money`, erros e `FailureCode`),
   `wallet` (`Wallet`, `WalletLedgerEntry`, `LedgerDirection`) e `wagering`
   (`WagerTransaction` e as regras de referência). *(implementado)*
-* **`infrastructure`** — `src/infrastructure`, dividida entre `persistence`
+* **`infrastructure`**, `src/infrastructure`, dividida entre `persistence`
   (configuração do ORM, tipo monetário, *persistence records*, mappers,
   migrations e adapters dos repositories), `http` (controllers, parsing de
   contrato, filtro de erro e composição dos casos de uso), `messaging`
@@ -258,15 +258,15 @@ O processamento de uma operação, dentro de uma única transação PostgreSQL:
 6. grava a `WagerTransaction` com o saldo observado em `result_balance`;
 7. confirma tudo de uma vez, ou nada.
 
-Rejeições de negócio — saldo insuficiente, moeda divergente, wallet de outro
-player, referência inelegível, reversão que estouraria o saldo — não são
+Rejeições de negócio, saldo insuficiente, moeda divergente, wallet de outro
+player, referência inelegível, reversão que estouraria o saldo, não são
 exceções que abortam a transação: a transação é persistida como `REJECTED`, com
 `failureCode` e o saldo observado, e não produz lançamento. Operações sem efeito
 financeiro, como `LOSS`, e as que ficam em `PENDING_REFERENCE` seguem o mesmo
 caminho, também sem lançamento e sem alterar a `version` da wallet.
 
-Os passos de Inbox e Outbox — registrar a mensagem recebida e enfileirar os
-eventos de integração dentro da mesma transação — pertencem a esta fronteira e
+Os passos de Inbox e Outbox, registrar a mensagem recebida e enfileirar os
+eventos de integração dentro da mesma transação, pertencem a esta fronteira e
 acontecem nela. A publicação dos eventos e o `ack` da mensagem ficam de fora, e
 só ocorrem depois do commit.
 
@@ -332,7 +332,7 @@ O formato aceito na entrada é canônico e estrito: sinal opcional, parte inteir
 sem zeros à esquerda e exatamente duas casas decimais. São rejeitados `""`,
 `"25"`, `"25.5"`, `"25.000"`, notação científica, `NaN`, `Infinity`, espaços nas
 bordas, `"+25.00"`, `"007.00"`, `"-0.00"` e valores que não sejam string. Casas
-excedentes nunca são arredondadas em silêncio — são erro. A forma canônica única
+excedentes nunca são arredondadas em silêncio, são erro. A forma canônica única
 importa porque o `payloadHash` da idempotência é calculado sobre esses valores:
 duas grafias do mesmo valor produziriam hashes diferentes e transformariam um
 replay legítimo em conflito.
@@ -347,7 +347,7 @@ ordenar ou somar moedas distintas não tem significado.
 
 O intervalo representável é finito e casado com a coluna do banco: até
 `999999999999999999.99` em módulo. O limite é verificado no construtor, então
-toda instância nasce válida, inclusive as produzidas por `add` e `subtract` — um
+toda instância nasce válida, inclusive as produzidas por `add` e `subtract`, um
 estouro falha na operação que o causou, e não mais tarde, num `INSERT`. Ver
 *Persistência de Money* para a coluna correspondente e o porquê do valor.
 
@@ -369,7 +369,7 @@ NestJS.
   recusada não deixa estado parcialmente alterado.
 
 `debit` e `credit` devolvem um `WalletMovement` com direção, valor e saldos antes
-e depois — exatamente os dados que o lançamento do ledger consome. Isso evita
+e depois, exatamente os dados que o lançamento do ledger consome. Isso evita
 recalcular o movimento ao criar o lançamento, mas não obriga o chamador a persistir
 ambos. Persistir esse par atomicamente continua sendo responsabilidade da
 aplicação e do PostgreSQL: nada em memória garante atomicidade.
@@ -392,7 +392,7 @@ O ledger é o registro auditável: lançamentos existentes nunca são sobrescrit
 ou removidos para representar novas operações. Reversões são novas operações com
 novos lançamentos, o que preserva a rastreabilidade e permite reconstruir o
 saldo a partir do histórico. A unicidade por transação e wallet e a proibição de
-`UPDATE` e `DELETE` são reforçadas pelo PostgreSQL — ver *Garantias do schema
+`UPDATE` e `DELETE` são reforçadas pelo PostgreSQL, ver *Garantias do schema
 financeiro*.
 
 ### WagerTransaction
@@ -413,7 +413,7 @@ válidas são:
 caminho de negócio. `PENDING_REFERENCE` não se repete: uma tentativa do worker
 que não encontra a referência deixa a linha como está, e o controle de
 tentativas pertence à aplicação. Chega a esse estado qualquer operação submetida
-com referência externa cuja referência ainda não existe — sempre `REFUND` e
+com referência externa cuja referência ainda não existe, sempre `REFUND` e
 `ROLLBACK`, e também `WIN` quando o provedor escolheu referenciar sua `BET`.
 
 `affectsBalance()` é falso apenas para `LOSS`. `matchesPayload` compara o
@@ -426,7 +426,7 @@ não pelo domínio.
 `id`, wallet, player, valor e instante. Uma abertura não vem de provedor, não
 pertence a rodada nem jogo e não nasce de uma requisição idempotente, então
 `providerId`, `externalTransactionId`, `idempotencyKey`, `payloadHash`,
-`roundId` e `gameId` ficam ausentes — e nulos na tabela — em vez de receberem
+`roundId` e `gameId` ficam ausentes, e nulos na tabela, em vez de receberem
 valores fictícios como `provider = "internal"`.
 
 A factory externa do domínio recusa `OPENING`, e os adaptadores HTTP e SQS
@@ -452,8 +452,8 @@ a operação foi submetida com `referenceExternalTransactionId`:
 A regra é simétrica: se o provedor apontou para uma transação, o registro
 processado precisa dizer qual registro interno foi de fato resolvido; se não
 apontou, o sistema não inventa um vínculo. As duas informações convivem, porque
-respondem a perguntas diferentes — o que o provedor enviou e o que a plataforma
-resolveu — e a segunda é uma chave estrangeira autorreferencial. O banco reforça
+respondem a perguntas diferentes, o que o provedor enviou e o que a plataforma
+resolveu, e a segunda é uma chave estrangeira autorreferencial. O banco reforça
 a mesma equivalência por CHECK.
 
 ### Regras de referência
@@ -496,7 +496,7 @@ Nenhuma proibição global mais restritiva foi acrescentada.
 A garantia tem duas camadas, porque a verificação sozinha não sobrevive a uma
 corrida. O domínio recebe o histórico como fato explícito
 (`ReversalFacts.referenceAlreadyReversedBySameKind`), consultado pela aplicação
-dentro da mesma transação — nenhum `Map`, `Set` ou cache participa. Sob duas
+dentro da mesma transação, nenhum `Map`, `Set` ou cache participa. Sob duas
 reversões simultâneas, ambas podem passar por essa verificação; quem decide é um
 índice único parcial que admite no máximo uma reversão `PROCESSED` por
 referência e tipo. A perdedora não é um conflito de identidade externa, e não é
@@ -535,7 +535,7 @@ não são o contrato.
 Uma transação termina em `REJECTED` quando uma regra de negócio a recusa, e o
 código vem de `FailureCode`. Termina em `FAILED` quando um erro técnico
 permanente impede o processamento, e o código vem de `InfrastructureFailureCode`
-— hoje com um único membro, `PERMANENT_INFRASTRUCTURE_FAILURE`, que crescerá
+, hoje com um único membro, `PERMANENT_INFRASTRUCTURE_FAILURE`, que crescerá
 junto da política de retry e DLQ do consumidor.
 
 Os dois espaços de código não se cruzam, e a separação é imposta nas duas
@@ -544,7 +544,7 @@ códigos técnicos, de modo que algo como `fail(INSUFFICIENT_FUNDS)` sequer
 compila. No banco, um CHECK amarra `failure_code` ao `status`: `REJECTED` exige
 um código de negócio, `FAILED` exige um código técnico, e os demais estados
 exigem ausência de código. A verificação é explícita quanto à obrigatoriedade
-porque um CHECK só rejeita `FALSE` — `null in (...)` avalia para `NULL` e
+porque um CHECK só rejeita `FALSE`, `null in (...)` avalia para `NULL` e
 passaria, deixando entrar uma transação rejeitada sem motivo registrado.
 
 Confundir as categorias não seria detalhe cosmético: um provedor decide reenviar
@@ -557,10 +557,10 @@ sido repetida.
 As exceções ficam em três categorias, para que a aplicação não trate todo erro
 como rejeição de negócio:
 
-* `InvalidInputError` — dado malformado ou uso indevido de uma API do domínio;
+* `InvalidInputError`, dado malformado ou uso indevido de uma API do domínio;
   não tem `failureCode`;
-* `DomainRuleViolationError` — rejeição financeira, sempre com `failureCode`;
-* `InvalidTransactionStateError` — erro de programação em uma transição.
+* `DomainRuleViolationError`, rejeição financeira, sempre com `failureCode`;
+* `InvalidTransactionStateError`, erro de programação em uma transição.
 
 ### Interpretações adotadas
 
@@ -600,8 +600,8 @@ o mecanismo de persistência e a autoridade final de consistência.
 
 A persistência permanece separada do domínio: as classes de domínio não carregam
 decorators nem tipos do ORM. O mapeamento vive inteiramente na infraestrutura,
-em *persistence records* — objetos planos, descritos por `EntitySchema`, com
-colunas escalares e sem relações declaradas — mais mappers que traduzem nos dois
+em *persistence records*, objetos planos, descritos por `EntitySchema`, com
+colunas escalares e sem relações declaradas, mais mappers que traduzem nos dois
 sentidos. A volta usa sempre as factories `rehydrate`, que reconstroem estado
 persistido sem gerar ids ou timestamps, sem incrementar `version` e sem
 reaplicar movimentações. Os records não repetem regra financeira alguma:
@@ -610,7 +610,7 @@ representam armazenamento.
 Duas consequências dessa escolha merecem registro. A conversão precisa traduzir
 o `null` do SQL para o `undefined` do domínio, sob pena de o tipo declarado
 mentir sobre o valor que carrega. E, sem relações declaradas, o ORM não deduz a
-ordem de inserção entre wallet, transação e lançamento — quem orquestra a
+ordem de inserção entre wallet, transação e lançamento, quem orquestra a
 operação respeita essa dependência explicitamente, o que é aceitável porque a
 ordem já é uma decisão consciente dentro da transação financeira.
 
@@ -633,7 +633,7 @@ Desenvolvimento e teste usam bancos separados, com configuração própria, para
 que uma execução de teste nunca alcance os dados de desenvolvimento; o custo de
 manter dois ambientes é aceito em troca desse isolamento. Os logs internos do
 ORM ficam desabilitados para não expor SQL nem credenciais, ao custo de um
-diagnóstico de infraestrutura mais pobre — limitação aceita nesta fase. Os
+diagnóstico de infraestrutura mais pobre, limitação aceita nesta fase. Os
 detalhes de execução local estão no [README.md](./README.md).
 
 ### Migrations
@@ -648,7 +648,7 @@ O schema financeiro é criado por uma única migration, escrita à mão em vez d
 gerada pelo diff das entidades: constraints compostas, índices parciais e
 triggers não são expressos no metadata do ORM, e o SQL revisado é o que
 realmente define as garantias. O gerador continua disponível, mas não é a fonte
-da verdade — a contrapartida é que a divergência entre metadata e schema não é
+da verdade, a contrapartida é que a divergência entre metadata e schema não é
 detectada automaticamente, e sim pelos testes de integração.
 
 As listas de `kind`, `status` e `failure_code` aparecem literalmente na
@@ -698,7 +698,7 @@ Money (bigint de centavos)  ↔  "25.00"  ↔  numeric(20,2)
 
 `numeric` foi escolhido em vez de `BIGINT` de centavos por três razões
 concretas. A escala declarada é preservada na saída, então a coluna devolve
-exatamente `"25.00"` — a mesma forma que `Money.from` aceita, sem reformatação
+exatamente `"25.00"`, a mesma forma que `Money.from` aceita, sem reformatação
 que pudesse introduzir erro. A aritmética de `numeric` é exata, o que permite
 expressar a conferência do ledger como CHECK legível
 (`balance_after = balance_before + amount`) e somar o ledger em SQL na
@@ -709,12 +709,12 @@ O trade-off aceito é que `numeric` ocupa mais espaço e é mais lento que um
 inteiro nativo. Para o volume deste serviço isso não pesa perto do ganho de
 exatidão e legibilidade. `BIGINT` teria a vantagem de espelhar a representação
 em memória sem conversão, mas exigiria formatar centavos como decimal em toda
-leitura e transformaria os CHECKs aritméticos em contas sobre inteiros — mais
+leitura e transformaria os CHECKs aritméticos em contas sobre inteiros, mais
 rápido e menos legível, num ponto em que legibilidade vale mais.
 
 Nenhum caminho monetário passa por `number`. O driver entrega `numeric` como
 string, e um tipo próprio do MikroORM valida a forma decimal na entrada e na
-saída, falhando alto se algum dia receber `number` — acima de
+saída, falhando alto se algum dia receber `number`, acima de
 `Number.MAX_SAFE_INTEGER` a perda aconteceria antes de qualquer validação de
 domínio e sem deixar rastro.
 
@@ -729,23 +729,23 @@ nasce de uma soma, e não um overflow surgido no meio de um `INSERT`.
 O banco reforça as invariantes estruturais e locais; regras que dependem de
 histórico ou de outra transação continuam no domínio e na aplicação.
 
-**`wallets`** — unicidade de `(player_id, currency)`, saldo não negativo,
+**`wallets`**, unicidade de `(player_id, currency)`, saldo não negativo,
 `version >= 1` e formato ISO-4217 da moeda. Uma unicidade adicional em
 `(id, currency)` existe para servir de alvo à chave composta do ledger, descrita
 abaixo.
 
-**`wager_transactions`** — `kind` e `status` restritos aos valores do domínio.
+**`wager_transactions`**, `kind` e `status` restritos aos valores do domínio.
 Valor não negativo, e estritamente positivo em tudo que não seja `LOSS`. A
 identidade externa é tratada em bloco: ou a transação tem provider, id externo,
-chave de idempotência, payload hash, rodada e jogo, ou não tem nenhum deles —
+chave de idempotência, payload hash, rodada e jogo, ou não tem nenhum deles,
 e a ausência total é exatamente o que caracteriza `OPENING`. `REFUND` e
 `ROLLBACK` exigem referência externa; `BET`, `LOSS` e `OPENING` não a aceitam.
-`PENDING_REFERENCE` é restrito a `WIN`, `REFUND` e `ROLLBACK` — as operações que
+`PENDING_REFERENCE` é restrito a `WIN`, `REFUND` e `ROLLBACK`, as operações que
 podem citar uma referência externa. `processed_at` existe se e somente se o
 status é `PROCESSED`. A referência interna existe se e somente se a transação
 está `PROCESSED` e citou uma referência externa, e nunca aponta para si mesma.
 
-**`wallet_ledger_entries`** — valor estritamente positivo, saldos não negativos,
+**`wallet_ledger_entries`**, valor estritamente positivo, saldos não negativos,
 direção restrita a `DEBIT`/`CREDIT` e a aritmética conferida por CHECK nos dois
 sentidos. No máximo um lançamento por `(transaction_id, wallet_id)`.
 
@@ -754,7 +754,7 @@ antes disso.
 
 `wager_transactions` referencia a wallet apenas por `wallet_id`. A transação
 guarda a moeda que o provedor enviou, mesmo quando ela diverge da moeda da
-wallet — é justamente esse o caso de uma rejeição por `CURRENCY_MISMATCH`, e
+wallet, é justamente esse o caso de uma rejeição por `CURRENCY_MISMATCH`, e
 amarrá-la à moeda da wallet por chave composta impediria de gravar a operação
 divergente, transformando uma rejeição auditável em erro de integridade. O
 provedor perderia o registro do que de fato enviou.
@@ -785,7 +785,7 @@ referências; e `(wallet_id, created_at, id)` para a paginação estável do led
 A ausência de métodos de alteração no código é convenção; a garantia está no
 banco. Três triggers sobre `wallet_ledger_entries` rejeitam `UPDATE`, `DELETE` e
 `TRUNCATE`, chamando uma função que levanta exceção. A migration cria a função e
-os triggers no `up` e os remove no `down` — a função é um objeto à parte e não
+os triggers no `up` e os remove no `down`, a função é um objeto à parte e não
 some junto com a tabela. Correções financeiras continuam sendo novas operações
 com novos lançamentos, nunca edição de histórico.
 
@@ -808,7 +808,7 @@ wallet afetada, o impacto não se propaga para o resto do sistema.
 
 Não é usado lock global da aplicação nem qualquer sincronização em memória,
 porque a solução precisa permanecer correta com três ou mais instâncias
-executando simultaneamente — um mutex de processo não protege nada nesse
+executando simultaneamente, um mutex de processo não protege nada nesse
 cenário. Alterações de saldo também não podem ser um `read → calculate → update`
 sem controle explícito de concorrência.
 
@@ -830,9 +830,9 @@ concorrente da mesma wallet.
 O paralelismo entre **três ou mais instâncias** também está demonstrado, e com
 processos de verdade: o teste multi-instância inicia três processos separados,
 cada um com seu pool de conexões, seu cliente SQS e sua memória, apontando para
-o mesmo PostgreSQL e a mesma fila. Sobre eles roda o cenário obrigatório —
+o mesmo PostgreSQL e a mesma fila. Sobre eles roda o cenário obrigatório,
 `100 − 80 − 80` consumido por instâncias concorrentes deixa saldo `20.00` e um
-único débito — e a entrega da mesma mensagem a instâncias diferentes produz um
+único débito, e a entrega da mesma mensagem a instâncias diferentes produz um
 único efeito, com a Inbox barrando a repetição. Três *promises* no mesmo
 processo não provariam isso: elas compartilham memória, que é justamente o que
 nenhuma garantia pode depender.
@@ -843,7 +843,7 @@ somente quando o saldo muda de fato; o banco garante `version >= 1`.
 
 Ela **não** é usada como coluna de optimistic locking do MikroORM. O recurso do
 ORM incrementa a versão a cada `flush` da entidade alterada, o que quebraria a
-semântica acima assim que qualquer campo não monetário mudasse — a `version`
+semântica acima assim que qualquer campo não monetário mudasse, a `version`
 deixaria de contar movimentações de saldo e passaria a contar gravações. Somar
 optimistic locking ao lock pessimista também traria um segundo mecanismo de
 concorrência para raciocinar e testar, sem cobrir nenhum cenário que o primeiro
@@ -871,7 +871,7 @@ requisição legítima do primeiro passasse a ser tratada como conflito, além d
 revelar que aquela chave existe em algum lugar do serviço. O escopo por provider
 elimina essa classe de problema sem custo para quem segue o formato recomendado
 pelo desafio (`{providerId}:{externalTransactionId}`), que já é único entre
-provedores por construção — as duas alternativas só divergem quando um provedor
+provedores por construção, as duas alternativas só divergem quando um provedor
 escolhe uma chave curta, e é justamente aí que a versão global falharia.
 
 Isso mantém duas identidades distintas, ainda que os valores costumem ser
@@ -891,7 +891,7 @@ deixar isso explícito em vez de depender de como o banco trata nulos.
 A aplicação não deriva nem substitui silenciosamente uma chave ausente por um
 valor construído a partir de outros campos. Uma entrada sem chave é entrada
 inválida, tratada como tal na borda, e não uma operação a processar sob uma
-identidade inventada pela plataforma — inventá-la deslocaria a decisão de
+identidade inventada pela plataforma, inventá-la deslocaria a decisão de
 identidade do provedor para o serviço, exatamente onde ela não pode estar.
 
 A chave e o `payloadHash` são mecanismos separados e complementares: a chave
@@ -922,7 +922,7 @@ Quando duas tentativas simultâneas passam pela verificação inicial, uma delas
 viola a constraint; a aplicação então abre um novo escopo transacional e relê o
 vencedor pela identidade de idempotência, devolvendo replay ou conflito conforme
 o hash. Uma violação da identidade externa é traduzida em conflito, nunca
-convertida em replay — são identidades diferentes e confundi-las mascararia um
+convertida em replay, são identidades diferentes e confundi-las mascararia um
 reenvio divergente como repetição inofensiva.
 
 ---
@@ -933,12 +933,12 @@ O SQS é emulado localmente por LocalStack, com três filas FIFO:
 `wager-transactions.fifo` para comandos, `wager-transactions-dlq.fifo` como
 destino do redrive policy e `wager-events.fifo` para eventos de integração.
 Comandos e eventos ficam separados porque são contratos e consumidores
-diferentes — misturá-los obrigaria cada consumidor a filtrar o que não lhe
+diferentes, misturá-los obrigaria cada consumidor a filtrar o que não lhe
 interessa.
 
 `WagerSqsConsumer` é apenas transporte: valida o envelope, delega e traduz o
 desfecho em `ACK` ou não-`ACK`. A regra financeira continua no mesmo
-`ProcessWagerTransactionUseCase` que o HTTP usa — é a reutilização que impede os
+`ProcessWagerTransactionUseCase` que o HTTP usa, é a reutilização que impede os
 dois canais de divergirem.
 
 **FIFO é otimização, não garantia.** `MessageGroupId` e `MessageDeduplicationId`
@@ -957,7 +957,7 @@ pela mensagem, e o `ACK` só ocorre depois do commit.
 **Dois níveis de deduplicação, que não se confundem.** A Inbox responde por
 identidade de *transporte*: a mesma mensagem reentregue não é reprocessada. A
 idempotência financeira responde por `(providerId, idempotencyKey)`: a mesma
-operação reenviada em uma mensagem **nova** — `messageId` diferente — passa pela
+operação reenviada em uma mensagem **nova**, `messageId` diferente, passa pela
 Inbox e é resolvida como replay pelo núcleo financeiro, devolvendo o resultado
 original. Tratar as duas como equivalentes faria o sistema ora reprocessar o que
 não devia, ora recusar um reenvio legítimo.
@@ -966,13 +966,13 @@ não devia, ora recusar um reenvio legítimo.
 `(consumerName, messageId)` voltar com corpo diferente, isso não é replay: é
 anomalia do produtor, e aceitar em silêncio aplicaria efeitos de um payload sob
 a identidade de outro. O consumo é recusado e a mensagem segue para a DLQ pelo
-mesmo caminho de uma mensagem malformada. Esse hash é de transporte — compara o
-corpo como veio, sem canonicalização — e é deliberadamente distinto do
+mesmo caminho de uma mensagem malformada. Esse hash é de transporte, compara o
+corpo como veio, sem canonicalização, e é deliberadamente distinto do
 `payloadHash` canônico da idempotência financeira.
 
 **Corrida entre instâncias.** A verificação prévia é uma otimização; a garantia
 final é a chave primária `(consumerName, messageId)` no PostgreSQL. Duas
-instâncias podem ler "não existe" ao mesmo tempo e ambas tentar inserir — uma
+instâncias podem ler "não existe" ao mesmo tempo e ambas tentar inserir, uma
 vence, a outra recebe a violação de unicidade com a transação inteira revertida,
 sem ter aplicado nada.
 
@@ -989,7 +989,7 @@ unique violation em (consumerName, messageId)
 ```
 
 Concluir `duplicate` direto da violação aceitaria em silêncio um payload
-divergente sempre que a leitura prévia e a inserção concorrente se cruzassem —
+divergente sempre que a leitura prévia e a inserção concorrente se cruzassem,
 justamente a janela que o conflito de payload existe para cobrir. A releitura
 precisa de uma transação nova porque a anterior está abortada.
 
@@ -1016,7 +1016,7 @@ reentrega.
 
 Dentro de um escopo já aberto não há como recuperar uma corrida de unicidade sem
 sair dele: a violação invalida a transação inteira, e nenhuma consulta a mais
-responde. Por isso a recuperação acontece **fora** — tudo é revertido e a
+responde. Por isso a recuperação acontece **fora**, tudo é revertido e a
 decisão é tomada em uma transação nova, como descrito em *Inbox*. Quando não há
 decisão possível, a mensagem simplesmente não recebe `ACK` e o SQS reentrega.
 
@@ -1049,11 +1049,11 @@ para que o payload permaneça JSON estável e versionável.
 pendências: um consumidor que reagisse a ele contabilizaria movimento onde não
 houve nenhum. Os eventos nascem na camada de aplicação, não no transporte, de
 modo que HTTP e SQS produzem a mesma Outbox. E como o replay não reexecuta o
-efeito financeiro, ele também não gera novos eventos — 50 duplicatas de uma
+efeito financeiro, ele também não gera novos eventos, 50 duplicatas de uma
 aposta produzem um débito e um único `WalletBalanceChanged`.
 
 `correlationId` amarra tudo que pertence à mesma intenção do provedor;
-`causationId` aponta para o que causou diretamente o efeito — no consumo SQS, o
+`causationId` aponta para o que causou diretamente o efeito, no consumo SQS, o
 `messageId` recebido. Nada disso vem de contexto global: quem chama o caso de
 uso informa.
 
@@ -1062,7 +1062,7 @@ uso informa.
 O publisher reserva um lote de pendentes vencidas com `FOR UPDATE SKIP LOCKED`,
 publica e marca `published_at` na mesma transação. Publishers concorrentes pegam
 lotes disjuntos em vez de disputarem as mesmas linhas, e um publisher que morra
-libera os locks no rollback — as mensagens voltam ao pool sem precisar de claim
+libera os locks no rollback, as mensagens voltam ao pool sem precisar de claim
 com expiração própria.
 
 A garantia é **at-least-once, não exactly-once**. Se o processo morrer entre o
@@ -1070,7 +1070,7 @@ A garantia é **at-least-once, não exactly-once**. Se o processo morrer entre o
 e outro publisher enviará o mesmo evento de novo. A duplicata carrega o mesmo
 `eventId`, estável desde a transação financeira, e é por ele que o consumidor
 deduplica. Eliminar essa janela exigiria transação distribuída entre PostgreSQL
-e SQS — exatamente o que a Outbox existe para evitar.
+e SQS, exatamente o que a Outbox existe para evitar.
 
 Uma falha de publicação não derruba o lote: a mensagem recebe `attempts + 1` e
 um `next_attempt_at` com backoff exponencial limitado, e as demais seguem. A
@@ -1078,14 +1078,14 @@ linha publicada permanece na tabela como evidência operacional; não é removid
 
 O trade-off aceito é que o lock de linha é mantido durante a chamada de rede da
 publicação. Isso dispensa um mecanismo de claim com expiração, ao custo de
-segurar o lock enquanto o broker responde — aceitável para lotes pequenos, e o
+segurar o lock enquanto o broker responde, aceitável para lotes pequenos, e o
 motivo de `batchSize` ser modesto.
 
 ### Operações fora de ordem e `PENDING_REFERENCE`
 
 Uma operação que cita uma referência externa depende de uma transação anterior.
 Quando essa referência ainda não chegou, a operação é persistida como
-`PENDING_REFERENCE` em vez de ser descartada ou rejeitada de imediato —
+`PENDING_REFERENCE` em vez de ser descartada ou rejeitada de imediato,
 rejeitar uma operação válida só porque sua referência ainda não chegou seria
 incorreto sob entrega fora de ordem.
 
@@ -1096,7 +1096,7 @@ externa nunca entra nesse estado, porque não há nada a esperar. A pendência j
 persistida com o saldo observado e sem lançamento no ledger.
 
 O worker reavalia as pendências vencidas com backoff exponencial: 5s de base,
-dobrando até um teto de 5min, desistindo após 8 tentativas — cerca de vinte
+dobrando até um teto de 5min, desistindo após 8 tentativas, cerca de vinte
 minutos de janela, folgada para uma reordenação de fila e curta o bastante para
 o provedor receber um desfecho no mesmo turno operacional. Esgotado o limite, a
 operação vira `REJECTED` com `REFERENCE_NOT_FOUND` e o evento correspondente vai
@@ -1111,7 +1111,7 @@ A resolução reusa as mesmas funções de `reference-rules` do processamento
 normal; o worker não reimplementa `REFUND`, `ROLLBACK` nem `WIN` referenciado.
 
 **Múltiplos workers.** A seleção usa `SKIP LOCKED`, mas o lock dessa reserva
-termina junto da transação que a fez — por isso ela é tratada como dica, não
+termina junto da transação que a fez, por isso ela é tratada como dica, não
 como garantia. Antes de aplicar qualquer efeito, a pendência é relida **sob lock
 de linha** e o status é conferido: se outro worker já a resolveu, o estado não é
 mais `PENDING_REFERENCE` e nada é aplicado duas vezes. A garantia final continua
@@ -1122,12 +1122,12 @@ no PostgreSQL, não em coordenação entre workers.
 O consumo distingue três classes de erro, e essa distinção é o que evita retries
 infinitos sobre problemas que nunca vão se resolver sozinhos:
 
-* **negócio** — terminal: a transação é persistida como `REJECTED` com
+* **negócio**, terminal: a transação é persistida como `REJECTED` com
   `failureCode`, o evento vai para a Outbox e a mensagem recebe `ACK`.
   Reprocessar não mudaria o resultado;
-* **transitório de infraestrutura** — sem `ACK`: o SQS devolve a mensagem depois
+* **transitório de infraestrutura**, sem `ACK`: o SQS devolve a mensagem depois
   do visibility timeout e a próxima tentativa encontra o banco disponível;
-* **permanente** — mensagem malformada ou com conflito de payload: reentregar
+* **permanente**, mensagem malformada ou com conflito de payload: reentregar
   não conserta o corpo, então também não recebe `ACK` e o redrive policy a leva
   à DLQ.
 
@@ -1144,19 +1144,19 @@ falha de infraestrutura antes do commit
 
 Transitório e permanente não são a mesma coisa e não devem ser tratados como tal:
 uma indisponibilidade momentânea do banco não manda a mensagem para a DLQ na
-primeira tentativa — ela volta pela fila e conclui. O que leva à DLQ é a
+primeira tentativa, ela volta pela fila e conclui. O que leva à DLQ é a
 repetição até `maxReceiveCount`, que é o comportamento correto para um corpo que
 nunca vai processar.
 
 **Validação de envelope.** Antes de qualquer efeito, o corpo precisa ser um
 envelope completo: `messageId` não vazio, `type` igual a
 `WagerTransactionRequested`, `occurredAt` como data e hora ISO-8601 com fuso
-explícito — recusando formato inválido, data inexistente e ausência — e os campos
+explícito, recusando formato inválido, data inexistente e ausência, e os campos
 obrigatórios do comando. O que não passa é poison message e segue o caminho da
 DLQ sem tocar em dinheiro.
 
-O retry é o do próprio SQS — visibility timeout mais `maxReceiveCount` no
-redrive policy — e não um laço interno competindo com ele. Um laço próprio
+O retry é o do próprio SQS, visibility timeout mais `maxReceiveCount` no
+redrive policy, e não um laço interno competindo com ele. Um laço próprio
 duplicaria a política em dois lugares e tornaria o comportamento sob falha mais
 difícil de prever do que já é.
 
@@ -1173,7 +1173,7 @@ financeira: recebe, valida o contrato, delega e mapeia a resposta. Aritmética
 monetária, movimentação de saldo, validação de referência, idempotência, hash
 canônico, locking e SQL ficam onde já estavam. `POST /wagering/transactions`
 chama exatamente o mesmo `ProcessWagerTransactionUseCase` que o consumidor SQS
-usará — é essa reutilização que impede as duas entradas de divergirem.
+usará, é essa reutilização que impede as duas entradas de divergirem.
 
 Os casos de uso e as queries são instanciados por factory no módulo HTTP, sem
 decorators de DI nas classes de aplicação. A camada de aplicação continua sendo
@@ -1181,7 +1181,7 @@ TypeScript puro, ignorando o NestJS; quem sabe montá-la é o transporte.
 
 Os endpoints financeiros aceitam o cabeçalho opcional `X-Correlation-Id`, que é
 propagado explicitamente para o caso de uso e chega ao envelope dos eventos de
-integração — ver *Observabilidade*. Quando ausente, a borda gera um. Esse
+integração, ver *Observabilidade*. Quando ausente, a borda gera um. Esse
 metadado **não** entra no `payloadHash`: trocar o identificador de rastreamento
 não pode transformar um replay legítimo em conflito de idempotência.
 
@@ -1206,14 +1206,14 @@ metadados de decorator. O efeito é o mesmo de `whitelist` com
 `forbidNonWhitelisted`: campo desconhecido é erro, não algo silenciosamente
 ignorado.
 
-A fronteira é deliberada. O contrato responde por presença, tipo e forma —
+A fronteira é deliberada. O contrato responde por presença, tipo e forma,
 inclusive por recusar `OPENING`, que é interna. Regra de negócio continua na
 aplicação e no domínio, que sabem devolver um `failureCode` estável. `amount`
 atravessa a borda como string decimal: convertê-lo para `number` destruiria a
 exatidão antes que `Money` pudesse recusar o valor.
 
 O header `Idempotency-Key` é obrigatório e o serviço nunca o deriva de outros
-campos — ausência é erro de contrato, não uma chave inventada pela plataforma.
+campos, ausência é erro de contrato, não uma chave inventada pela plataforma.
 
 ### Mapeamento de status
 
@@ -1238,7 +1238,7 @@ persistida como `REJECTED`, e o corpo de `422` mantém `transactionId`, `status`
 
 Um `ExceptionFilter` único traduz os erros conhecidos. Concentrar isso evita
 `try/catch` repetido em cada controller e garante que `SQLSTATE`, nome de
-constraint, `DriverException` e stack trace fiquem no log — o cliente recebe
+constraint, `DriverException` e stack trace fiquem no log, o cliente recebe
 sempre `{ code, message }`, com código estável e mensagem própria.
 
 ### Paginação do ledger
@@ -1250,7 +1250,7 @@ offset: o ledger é append-only e cresce durante a navegação, e um offset
 pularia ou repetiria lançamentos assim que uma operação fosse confirmada entre
 duas páginas.
 
-O cursor é opaco — um base64url de JSON carregando a última posição e uma
+O cursor é opaco, um base64url de JSON carregando a última posição e uma
 versão de formato. Opaco porque a estrutura não é contrato público e precisa
 poder mudar; versionado porque um cursor emitido por outro formato deve ser
 recusado, não interpretado às cegas. O `limit` tem padrão 50, conforme o
@@ -1274,7 +1274,7 @@ A leitura roda em `REPEATABLE READ`. Wallet e ledger são consultados em
 statements diferentes; sob `READ COMMITTED` cada um veria um snapshot próprio, e
 uma operação confirmada no intervalo faria a comparação acusar uma divergência
 que nunca existiu. O snapshot único elimina esse falso positivo sem bloquear
-ninguém — não há lock exclusivo, porque nada é escrito e segurar a wallet
+ninguém, não há lock exclusivo, porque nada é escrito e segurar a wallet
 penalizaria o processamento por causa de uma consulta de auditoria.
 
 ### Health checks
@@ -1290,7 +1290,7 @@ alcança a fila de entrada não está pronta para consumir, e declarar-se pronta
 seria informação falsa. Ambos os endpoints são públicos, sem autenticação, e
 `GET /metrics` segue a mesma regra pelo mesmo motivo: são endpoints de
 plataforma, consumidos por orquestrador e coletor que rodam ao lado do serviço.
-Exigir credencial neles quebraria a coleta sem proteger nada — não há dado
+Exigir credencial neles quebraria a coleta sem proteger nada, não há dado
 financeiro ali, apenas contadores agregados sem identificadores.
 
 **Autenticação não foi implementada nesta entrega.** É uma decisão de escopo,
@@ -1302,7 +1302,7 @@ senha dentro deste serviço.
 
 O ponto de extensão existe e é nomeado: `ProviderIdentityGuard`, aplicado aos
 controllers financeiros e hoje um no-op deliberado. Instalar um verificador OIDC
-é substituir o corpo daquele método — não espalhar checagens pelos controllers
+é substituir o corpo daquele método, não espalhar checagens pelos controllers
 nem, pior, dentro das regras financeiras. O guard não cobre health nem
 `/metrics`, de modo que ligar a autenticação não derruba a sonda do orquestrador
 nem a coleta. Mensagens da fila continuam tratadas como canal interno confiável,
@@ -1315,7 +1315,7 @@ na própria mensagem.
 
 ### Logs estruturados
 
-A aplicação usa o logger nativo do NestJS em modo JSON — `ConsoleLogger({ json:
+A aplicação usa o logger nativo do NestJS em modo JSON, `ConsoleLogger({ json:
 true })`, configurado uma única vez no bootstrap. Cada registro operacional é um
 **objeto**, não uma frase interpolada: `{ event, correlationId, messageId,
 transactionId, walletId, providerId, status }`, com os campos que existirem no
@@ -1327,7 +1327,7 @@ de casar substring de mensagem.
 
 **O que não entra no log.** Valor da operação, saldo, corpo da requisição, corpo
 da mensagem e cabeçalhos. Diagnóstico precisa saber *qual* transação falhou, não
-*quanto* ela movimentou — e um payload financeiro completo em log é exatamente o
+*quanto* ela movimentou, e um payload financeiro completo em log é exatamente o
 que uma auditoria não quer encontrar. A única exceção deliberada é a diferença
 de uma reconciliação divergente: ali o valor **é** o achado. Os logs internos do
 ORM seguem desabilitados pela mesma razão.
@@ -1339,15 +1339,15 @@ até o evento de integração. Não há estado global nem `AsyncLocalStorage`: a
 dependência cabe em um argumento, e escondê-la só a tornaria mais difícil de
 seguir.
 
-* **HTTP** — o cabeçalho `X-Correlation-Id` é aceito quando presente, o que
+* **HTTP**, o cabeçalho `X-Correlation-Id` é aceito quando presente, o que
   permite acompanhar uma operação desde o sistema do provedor; sem ele, a borda
   gera um UUID. O valor tem tamanho limitado, porque é entrada não confiável que
   vai para log e para o envelope de eventos.
-* **SQS** — a correlação é a própria identidade da operação,
+* **SQS**, a correlação é a própria identidade da operação,
   `providerId:idempotencyKey`, e a causação é o `messageId`. Ambas são estáveis
   entre reentregas, que é o comportamento desejado de um identificador de
   correlação.
-* **Eventos** — `correlationId` e `causationId` viajam no envelope gravado na
+* **Eventos**, `correlationId` e `causationId` viajam no envelope gravado na
   Outbox, então o consumidor externo recebe a mesma linha de rastreamento.
 
 Metadado de correlação **não** entra no `payloadHash` financeiro: mudar o
@@ -1358,13 +1358,13 @@ idempotência.
 
 Exposição em `GET /metrics`, formato de texto do Prometheus, via `prom-client`.
 A dependência foi acrescentada porque o alternativo era escrever um registro de
-métricas próprio — contadores, histogramas, formatação da exposição — para
+métricas próprio, contadores, histogramas, formatação da exposição, para
 reimplementar mal o que uma biblioteca pequena e padrão já faz; o desafio
 inclusive a sugere.
 
 Cada instância da aplicação tem seu **próprio** `Registry`, nunca o global do
-`prom-client`. Dois aplicativos no mesmo processo — o caso normal da suíte de
-testes — colidiriam em *metric already registered* e vazariam contagem de um
+`prom-client`. Dois aplicativos no mesmo processo, o caso normal da suíte de
+testes, colidiriam em *metric already registered* e vazariam contagem de um
 teste para o outro.
 
 | Métrica | Tipo | O que mede |
@@ -1382,14 +1382,14 @@ teste para o outro.
 | `wallet_reconciliation_divergences_total` | counter | reconciliações em que o saldo divergiu do ledger |
 
 Nenhum identificador dinâmico vira label. `status`, `transport`, `source`,
-`component` e `reason` são uniões fechadas no tipo da porta de métricas —
+`component` e `reason` são uniões fechadas no tipo da porta de métricas,
 `transactionId`, `walletId`, `providerId` ou `messageId` como label produziriam
 cardinalidade ilimitada e derrubariam o coletor antes de ajudar alguém.
 
 Quatro definições merecem ser ditas com precisão, porque um nome que promete
 mais do que a métrica mede é pior que a ausência dela:
 
-* **DLQ.** A aplicação **não** move mensagens para a DLQ — quem faz isso é o
+* **DLQ.** A aplicação **não** move mensagens para a DLQ, quem faz isso é o
   redrive policy do SQS depois de `maxReceiveCount` entregas. Medir "enviei para
   a DLQ" seria inventar conhecimento que o processo não tem. Então há duas
   métricas distintas: `wager_messages_permanent_total` conta o que a aplicação
@@ -1397,7 +1397,7 @@ mais do que a métrica mede é pior que a ausência dela:
   confirmou, e `wager_dlq_messages` é lida do próprio broker no instante do
   scrape. Quando o SQS não responde, a série **desaparece** em vez de reportar
   zero: zero afirmaria que a DLQ está vazia sem ter olhado.
-* **Conflito de lock.** Com lock pessimista, disputa não vira erro — vira
+* **Conflito de lock.** Com lock pessimista, disputa não vira erro, vira
   espera. `wallet_lock_wait_seconds` é a duração da aquisição, e é nela que uma
   hot wallet aparece, como cauda alta. `wallet_lock_conflicts_total` só se move
   quando o PostgreSQL de fato levanta `40P01` (deadlock) ou `55P03` (lock
@@ -1419,7 +1419,7 @@ commit, um `ACK` ou a publicação de um evento. Perder uma amostra é aceitáve
 perder uma transação não é.
 
 Liveness e readiness são expostos separadamente e a readiness cobre PostgreSQL e
-SQS — ver *Health checks*.
+SQS, ver *Health checks*.
 
 ---
 
@@ -1460,16 +1460,16 @@ incluindo paginação do ledger, idempotência ponta a ponta, rejeição de neg�
 `PENDING_REFERENCE`, reconciliação consistente e divergente, e health checks.
 
 A mensageria é exercitada contra LocalStack real: consumo de fila com `ACK`
-após commit, deduplicação por Inbox em redelivery, conflito de payload —
+após commit, deduplicação por Inbox em redelivery, conflito de payload,
 sequencial e sob corrida concorrente pela chave da Inbox, sincronizada de forma
-determinística —, rejeição de negócio terminal, mensagem malformada chegando à
+determinística,, rejeição de negócio terminal, mensagem malformada chegando à
 DLQ pelo redrive policy, falha transitória antes do commit que não recebe `ACK`
 e conclui na reentrega do próprio SQS, atomicidade da unidade de trabalho sob
 rollback, publicação da Outbox com dois publishers concorrentes, recuperação de
 evento pendente após falha do publisher, resolução e expiração de
 `PENDING_REFERENCE`, e três instâncias simultâneas.
 
-As métricas obrigatórias existem e são exercitadas por testes — exposição do
+As métricas obrigatórias existem e são exercitadas por testes, exposição do
 endpoint, contagem por status, duplicatas, retries, permanentes, espera de lock,
 lag da Outbox e divergência de reconciliação. O que **não** está incluído é a
 stack de coleta: não há container do Prometheus nem dashboard no Compose, e os
@@ -1482,11 +1482,11 @@ A publicação é at-least-once por desenho, então um consumidor externo precis
 deduplicar por `eventId`; isso é contrato, não limitação a corrigir.
 
 O `SIGTERM` é tratado pelos hooks do NestJS e pelos workers. A parada limpa do
-worker — concluir o ciclo em andamento e não adquirir nenhum outro — tem teste
+worker, concluir o ciclo em andamento e não adquirir nenhum outro, tem teste
 determinístico próprio. O que continua sem cobertura é matar o processo no
 meio de um ciclo e observar a retomada: montar isso de forma estável exigiria um
 harness de processo mais frágil do que o valor que acrescentaria, já que a
-propriedade que importa — nada de efeito parcial, nada confirmado sem commit — é
+propriedade que importa, nada de efeito parcial, nada confirmado sem commit, é
 a mesma demonstrada pelos cenários de crash entre commit e `ACK` e de falha
 transitória com reentrega.
 
