@@ -11,7 +11,13 @@ import { createDatabaseOptions } from '../../src/infrastructure/persistence/data
  * provaria nada sobre o `down()`.
  */
 
-const FINANCIAL_TABLES = ['wallets', 'wager_transactions', 'wallet_ledger_entries'];
+const FINANCIAL_TABLES = [
+  'wallets',
+  'wager_transactions',
+  'wallet_ledger_entries',
+  'inbox_messages',
+  'outbox_messages',
+];
 
 const CRITICAL_CONSTRAINTS = [
   'wallets_player_currency_unique',
@@ -32,7 +38,11 @@ const CRITICAL_INDEXES = [
   'wager_transactions_opening_per_wallet_unique',
   'wager_transactions_wallet_created_idx',
   'wager_transactions_pending_reference_idx',
+  'wager_transactions_processed_reversal_unique',
   'wallet_ledger_entries_wallet_idx',
+  'outbox_messages_pending_idx',
+  'wager_transactions_pending_due_idx',
+  'inbox_messages_pkey',
 ];
 
 const LEDGER_TRIGGERS = [
@@ -154,11 +164,11 @@ test('a migration financeira sobe, reverte e sobe de novo', async () => {
   const migrator = orm.migrator;
 
   expect(await tableNames()).toEqual([]);
-  expect(await migrator.getPending()).toHaveLength(1);
+  expect(await migrator.getPending()).toHaveLength(4);
 
   await migrator.up();
 
-  expect(await migrator.getExecuted()).toHaveLength(1);
+  expect(await migrator.getExecuted()).toHaveLength(4);
   expect(await migrator.getPending()).toHaveLength(0);
 
   const tablesAfterUp = await tableNames();
@@ -184,9 +194,12 @@ test('a migration financeira sobe, reverte e sobe de novo', async () => {
   expect(await functionNames()).toContain(IMMUTABILITY_FUNCTION);
 
   await migrator.down();
+  await migrator.down();
+  await migrator.down();
+  await migrator.down();
 
   expect(await migrator.getExecuted()).toHaveLength(0);
-  expect(await migrator.getPending()).toHaveLength(1);
+  expect(await migrator.getPending()).toHaveLength(4);
 
   // O `down()` precisa levar embora tudo o que o `up()` criou, inclusive a
   // função dos triggers, que não some junto com a tabela.
@@ -210,7 +223,7 @@ test('a migration financeira sobe, reverte e sobe de novo', async () => {
 
   await migrator.up();
 
-  expect(await migrator.getExecuted()).toHaveLength(1);
+  expect(await migrator.getExecuted()).toHaveLength(4);
   expect(await functionNames()).toContain(IMMUTABILITY_FUNCTION);
   expect(await migrator.getPending()).toHaveLength(0);
 
@@ -234,3 +247,4 @@ test('a migration financeira sobe, reverte e sobe de novo', async () => {
     expect(triggersAfterReapply).toContain(trigger);
   }
 }, 60000);
+

@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { Migrator } from '@mikro-orm/migrations';
 import { defineConfig } from '@mikro-orm/postgresql';
+import { inboxMessageSchema } from './entities/inbox-message.record.js';
+import { outboxMessageSchema } from './entities/outbox-message.record.js';
 import { wagerTransactionSchema } from './entities/wager-transaction.record.js';
 import { walletLedgerEntrySchema } from './entities/wallet-ledger-entry.record.js';
 import { walletSchema } from './entities/wallet.record.js';
@@ -40,7 +42,13 @@ export function createDatabaseOptions(env: NodeJS.ProcessEnv = process.env) {
     dbName,
     user,
     password,
-    entities: [walletSchema, wagerTransactionSchema, walletLedgerEntrySchema],
+    entities: [
+      walletSchema,
+      wagerTransactionSchema,
+      walletLedgerEntrySchema,
+      inboxMessageSchema,
+      outboxMessageSchema,
+    ],
     allowGlobalContext: false,
     ensureDatabase: false,
     debug: false,
