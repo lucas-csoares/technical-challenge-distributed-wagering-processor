@@ -1,10 +1,21 @@
 # Distributed Wagering Processor
 
-Serviço NestJS com PostgreSQL/MikroORM, Docker Compose, o núcleo do domínio
-financeiro em `src/domain` e o schema financeiro em `src/infrastructure/persistence`,
-com migration reversível e constraints verificadas contra PostgreSQL real.
-Os casos de uso, os endpoints e a mensageria ainda não estão implementados.
-As decisões e invariantes estão em [ARCHITECTURE.md](./ARCHITECTURE.md).
+Serviço NestJS com PostgreSQL/MikroORM e Docker Compose. O núcleo financeiro
+está implementado e validado contra PostgreSQL real: domínio, schema com
+migration reversível, repositories, fronteira transacional com locking
+pessimista por wallet, criação de wallet e processamento de `BET`, `WIN`,
+`LOSS`, `REFUND` e `ROLLBACK`, com idempotência persistente e replay histórico.
+
+A API HTTP expõe wallets, wagering, consultas, reconciliação e health checks. O
+consumo assíncrono usa AWS SQS (LocalStack) com Inbox persistente, Transactional
+Outbox, eventos de integração, publisher concorrente, worker de reprocessamento
+de `PENDING_REFERENCE` e DLQ.
+
+A observabilidade cobre logs estruturados JSON com correlação, métricas
+Prometheus em `GET /metrics` e health checks separados de liveness e readiness.
+Autenticação é omissão deliberada e documentada, com ponto de extensão explícito
+no código. As decisões, invariantes e limitações estão em
+[ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Requisitos e instalação
 
@@ -19,19 +30,137 @@ configurações existentes. Bun e Compose carregam `.env` automaticamente.
 O exemplo contém apenas credenciais locais descartáveis. `.env` está no `.gitignore`.
 
 ```sh
+[ -f .env ] || cp .env.example .env
 bun --version
 bun install --frozen-lockfile
-docker compose up -d --wait postgres
+docker compose up -d --wait postgres localstack
 bun run migration:up
 bun run dev
 ```
 
+A primeira linha cria `.env` apenas quando ele ainda não existe, para não
+sobrescrever uma configuração local. No Windows, copie `.env.example` para
+`.env` pelo Explorer ou com o comando equivalente do seu shell; o restante do
+fluxo é o mesmo.
+
+O serviço `localstack` sobe o SQS emulado e cria as filas
+`wager-transactions.fifo`, `wager-transactions-dlq.fifo` (destino do redrive
+policy, `maxReceiveCount=3`) e `wager-events.fifo` pelo script
+`scripts/localstack-init.sh`. Nenhum endpoint é fixado no código: tudo vem de
+variáveis de ambiente.
+
+Os workers de fundo — consumidor SQS, publisher da Outbox e reprocessamento de
+`PENDING_REFERENCE` — só iniciam com `MESSAGING_WORKERS_ENABLED=true`:
+
+```sh
+MESSAGING_WORKERS_ENABLED=true bun run dev
+```
+
+Eles ficam desligados por padrão para que subir a API localmente não consuma a
+fila sem que se queira, e para que os testes dirijam cada ciclo explicitamente.
+
 A porta padrão é `3000`; a variável de ambiente `PORT` permite alterá-la.
 Por exemplo, no PowerShell: `$env:PORT = '3001'`, seguido de `bun run dev`.
 A porta `0` solicita uma porta livre ao sistema operacional, usada pelos testes.
-O servidor ainda não registra rotas: `GET /` retorna `404`, intencionalmente.
-Health checks serão implementados na etapa apropriada, incluindo as dependências
-reais na verificação de readiness.
+Rode `bun run migration:up` antes de subir a API: o schema financeiro não é
+criado automaticamente.
+
+## API
+
+| Método | Rota |
+| --- | --- |
+| `POST` | `/wallets` |
+| `GET` | `/wallets/:walletId` |
+| `GET` | `/wallets/:walletId/ledger?cursor=...&limit=50` |
+| `POST` | `/wallets/:walletId/reconciliation` |
+| `POST` | `/wagering/transactions` |
+| `GET` | `/wagering/transactions/:transactionId` |
+| `GET` | `/providers/:providerId/wagering/transactions/:externalTransactionId` |
+| `GET` | `/health/live` |
+| `GET` | `/health/ready` |
+| `GET` | `/metrics` |
+
+Criar uma wallet:
+
+```sh
+curl -X POST http://localhost:3000/wallets \
+  -H 'content-type: application/json' \
+  -d '{"playerId":"player-1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
+```
+
+Submeter uma transação. O header `Idempotency-Key` é obrigatório e o serviço
+não o gera por você:
+
+```sh
+curl -X POST http://localhost:3000/wagering/transactions \
+  -H 'content-type: application/json' \
+  -H 'Idempotency-Key: provider-a:transaction-123' \
+  -d '{"providerId":"provider-a","externalTransactionId":"transaction-123",
+       "playerId":"player-1","walletId":"<wallet-id>","roundId":"round-987",
+       "gameId":"fortune-chimp","kind":"BET",
+       "money":{"amount":"25.00","currency":"BRL"}}'
+```
+
+Consultar wallet, paginar o ledger e reconciliar:
+
+```sh
+curl http://localhost:3000/wallets/<wallet-id>
+curl 'http://localhost:3000/wallets/<wallet-id>/ledger?limit=50'
+curl -X POST http://localhost:3000/wallets/<wallet-id>/reconciliation
+curl http://localhost:3000/health/live
+curl http://localhost:3000/health/ready
+curl http://localhost:3000/metrics
+```
+
+`/health/live` responde sobre o processo; `/health/ready` sonda PostgreSQL e SQS
+e devolve `503` quando alguma dependência falha. `/metrics` expõe o formato de
+texto do Prometheus. Os três são públicos, sem autenticação.
+
+Para acompanhar uma operação de ponta a ponta, envie `X-Correlation-Id`; o valor
+aparece nos logs e no envelope dos eventos de integração. Sem o cabeçalho, o
+serviço gera um.
+
+A mesma operação pode chegar pela fila, e percorre exatamente o mesmo caso de
+uso. Com os workers ligados (`MESSAGING_WORKERS_ENABLED=true`), publique pelo
+`awslocal` que já vem na imagem do LocalStack:
+
+```sh
+QUEUE_URL=$(docker compose exec -T localstack \
+  awslocal sqs get-queue-url \
+  --queue-name wager-transactions.fifo \
+  --query QueueUrl \
+  --output text)
+
+docker compose exec -T localstack \
+  awslocal sqs send-message \
+  --queue-url "$QUEUE_URL" \
+  --message-group-id '<wallet-id>' \
+  --message-deduplication-id 'msg-1' \
+  --message-body '{"messageId":"msg-1","type":"WagerTransactionRequested",
+    "occurredAt":"2026-09-07T12:00:00.000Z",
+    "data":{"providerId":"provider-a","externalTransactionId":"transaction-124",
+      "idempotencyKey":"provider-a:transaction-124","playerId":"player-1",
+      "walletId":"<wallet-id>","roundId":"round-987","gameId":"fortune-chimp",
+      "kind":"BET","money":{"amount":"25.00","currency":"BRL"}}}'
+```
+
+A URL vem do próprio LocalStack por `get-queue-url`, então o exemplo não depende
+de `WAGER_QUEUE_URL` estar exportada no shell — copiar `.env.example` para `.env`
+alimenta o Compose e a aplicação, não o shell de quem digita o comando. O `-T`
+desativa o TTY, sem o qual a URL capturada viria com caracteres de controle.
+`wager-transactions.fifo` exige `--message-group-id` e
+`--message-deduplication-id`; use o `walletId` como grupo para manter a ordem
+relativa das operações da mesma wallet.
+
+`occurredAt` é obrigatório e precisa ser ISO-8601 com fuso explícito. Um envelope
+inválido nunca toca em dinheiro: fica sem `ACK` e o redrive policy o encaminha
+para a DLQ.
+
+Repetir a mesma requisição com a mesma `Idempotency-Key` devolve o resultado
+original (`idempotentReplay: true`), incluindo o saldo observado na época. A
+mesma chave com payload diferente responde `409`. Uma rejeição de negócio
+responde `422` com `failureCode`, e uma operação aguardando referência responde
+`202`. O mapeamento completo está em [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## PostgreSQL e variáveis
 
@@ -52,15 +181,21 @@ a variável não foi definida; não execute os testes com `NODE_ENV=development`
 Os serviços usam `postgres:18.6-bookworm`, healthcheck com `pg_isready`, portas
 publicadas apenas em loopback e volumes nomeados distintos. O volume é montado
 em `/var/lib/postgresql`, conforme o layout da imagem PostgreSQL 18. As portas
-do exemplo evitam a porta 5432, já ocupada neste ambiente por outro PostgreSQL.
+do exemplo evitam a porta 5432 para não colidir com um PostgreSQL já instalado
+na máquina.
 O profile `test` habilita um segundo container, independente do desenvolvimento.
 
 ```sh
-docker compose --profile test up -d --wait postgres-test
+docker compose --profile test up -d --wait postgres-test localstack-test
 bun run test
 bun run test:integration
 docker compose --profile test stop
 ```
+
+Os testes de mensageria exigem `localstack-test`, que usa porta e filas próprias
+(`TEST_SQS_*`, `TEST_WAGER_QUEUE_URL`, …). A configuração recusa apontar os
+testes para as filas de desenvolvimento, do mesmo modo que já recusa o banco de
+desenvolvimento.
 
 O último comando preserva os dados. Não é necessário remover volumes. Alterar
 usuário, senha ou nome no `.env` não reconfigura um volume PostgreSQL já inicializado;
@@ -165,12 +300,19 @@ PostgreSQL ou SQS: `shared` (`Money`, erros de domínio e `FailureCode`),
 (`WagerTransaction` e as regras de referência). O domínio não lê o relógio nem
 gera identificadores — datas e ids vêm de quem chama.
 
-`application` e `interfaces` ainda não existem: nenhuma pasta é criada vazia.
-Os casos de uso entrarão em `application`, e os adaptadores de entrada em
-`interfaces`. Implementações de repositories e mensageria ficarão na infraestrutura,
-respeitando os boundaries de
-[ARCHITECTURE.md](./ARCHITECTURE.md), que registra as invariantes, as garantias
-do schema, a taxonomia de `failureCode` e as decisões ainda pendentes.
+`src/application` contém as portas de repository, a porta
+`FinancialTransactionManager`, os casos de uso (`CreateWalletUseCase`,
+`ProcessWagerTransactionUseCase`, `ReconcileWalletUseCase`) e as queries de
+leitura. O executor entrega um escopo transacional com os repositories de
+wallet, transação e ledger, sem expor MikroORM à aplicação; os casos de uso
+recebem comandos simples e não conhecem HTTP nem SQS. Os adapters PostgreSQL
+ficam na infraestrutura.
+
+`src/infrastructure/http` contém os controllers, o parsing de contrato, o filtro
+de erro e a composição dos casos de uso. Os adaptadores de entrada vivem aqui em
+vez de uma camada `interfaces` separada, conforme os boundaries de
+[ARCHITECTURE.md](./ARCHITECTURE.md), que registra também as invariantes, as
+garantias do schema, o mapeamento de status HTTP e as decisões pendentes.
 
 ## Ferramentas e compatibilidade
 
@@ -195,6 +337,8 @@ As versões estáveis foram consultadas no registro npm em 06/09/2026.
 | `@mikro-orm/migrations` | 7.1.15 | Migrations versionadas e reversíveis |
 | `@mikro-orm/cli` | 7.1.15 | Comandos de migrations, dependência de desenvolvimento |
 | `@types/pg` | 8.23.1 | Declarações exigidas pelo driver, apenas desenvolvimento |
+| `@aws-sdk/client-sqs` | 3.658.1 | Cliente SQS usado contra LocalStack |
+| `prom-client` | 15.1.3 | Registro de métricas e exposição em formato Prometheus |
 
 TypeScript 7.0.2 era o `latest` consultado, mas o `typescript-eslint` 8.69.0
 declara suporte a `>=4.8.4 <6.1.0`. Foi selecionado TypeScript 6.0.3, o estável
@@ -213,44 +357,74 @@ Referências: [integração NestJS](https://mikro-orm.io/docs/usage-with-nestjs)
 
 O build usa o compilador TypeScript executado por Bun, preservando decorators e
 metadados. Não há bundler, Nest CLI, Jest, Supertest ou ferramentas de formatação
-adicionais. Mensageria, autenticação e orquestração financeira permanecem futuras;
-as regras de domínio e sua persistência já existem.
+adicionais. O domínio, a persistência, a orquestração financeira — casos de uso
+e fronteira transacional —, a API HTTP, a mensageria com SQS, Inbox persistente,
+Transactional Outbox e workers de fundo, e a observabilidade com logs
+estruturados, métricas Prometheus e health checks já existem. Permanecem
+pendentes apenas a autenticação, mantida fora de escopo por decisão registrada
+em [ARCHITECTURE.md](ARCHITECTURE.md), e a stack de coleta das métricas —
+coletor, alertas e painel ficam fora desta entrega.
 
-## Validação nesta máquina (06/09/2026)
+## Validação executada (07/09/2026)
 
-Validação da continuação da Etapa 4.1, com Bun 1.4.2 e PostgreSQL real no
-container `postgres-test`:
+Executado com Bun 1.4.2, PostgreSQL real no container `postgres-test` e
+LocalStack real no container `localstack-test`:
 
 | Script | Resultado |
 | --- | --- |
 | `bun run typecheck` | PASS |
 | `bun run lint` | PASS, sem warnings |
-| `bun run test:unit` | 185 testes, 7 arquivos, 0 falhas |
-| `bun run test:integration` | 80 testes, 5 arquivos, 0 falhas |
-| `bun run test` | 265 testes, 12 arquivos, 0 falhas |
+| `bun run test:unit` | 241 testes, 12 arquivos, 0 falhas |
+| `bun run test:integration` | 199 testes, 17 arquivos, 0 falhas |
+| `bun run test` | 440 testes, 29 arquivos, 1517 asserções, 0 falhas |
 | `bun run build` | PASS |
 
-A integração cobre bootstrap HTTP, conexão, commit/rollback, constraints
-financeiras, mappings exatos e migration financeira `up → down → up`, incluindo
-a recriação dos índices. Os scripts foram executados com
-`bun --env-file=.env.example run <script>`. A primeira execução de integração
-no sandbox falhou na conexão HTTP local (`ConnectionRefused`); a repetição
-fora dele e a suíte completa passaram, sem alteração do teste ou da aplicação.
+A integração cobre conexão, commit/rollback, constraints financeiras, mappings
+exatos, migration financeira `up → down → up`, repositories, locks pessimistas
+reais por wallet, os casos de uso financeiros de ponta a ponta e a API HTTP
+contra o servidor NestJS real. Cada cenário financeiro termina conferindo
+`wallet.balance == saldo reconstruído pelo ledger`.
 
-Bun 1.4.2 está disponível apenas em uma pasta temporária, fora do `PATH`.
-Docker 27.2.0 e Compose v2.29.2 estão instalados e o engine responde.
+Os testes HTTP aplicam as migrations no schema que a aplicação usa de verdade e
+cobrem criação de wallet, duplicata, consultas, paginação do ledger por cursor,
+cursor inválido, idempotência com replay e conflito, `Idempotency-Key` ausente,
+rejeição de negócio, `PENDING_REFERENCE`, reconciliação consistente e
+divergente, e os health checks.
 
-No histórico anterior desta máquina, o Docker Engine estava inacessível: a distro WSL
-`docker-desktop` continuava registrada apontando para
-`%LOCALAPPDATA%\Docker\wsl\main\ext4.vhdx`, mas esse disco não existia mais, e
-o WSL falhava com `Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_PATH_NOT_FOUND`.
-A correção foi `wsl --unregister docker-desktop` seguido de reiniciar o Docker
-Desktop, que recriou a distro e seus discos. Isso é reparo de máquina, não
-requisito do projeto: nenhum arquivo do repositório precisou ser alterado, e as
-imagens e volumes anteriores do Docker já estavam perdidos com o disco ausente.
+Os testes de mensageria usam LocalStack real, não mock: consumo de fila com
+`ACK` após o commit, Inbox impedindo duplicação em redelivery, conflito de
+payload — sequencial e sob corrida concorrente pela chave da Inbox —, rejeição
+de negócio terminal, mensagem malformada chegando à DLQ pelo redrive policy,
+falha transitória antes do commit que não recebe `ACK` e conclui na reentrega
+real do SQS, atomicidade da unidade de trabalho sob rollback, eventos mínimos na
+Outbox, dois publishers concorrentes, recuperação de evento pendente, resolução
+e expiração de `PENDING_REFERENCE`, e **três instâncias em processos separados**
+sobre o mesmo PostgreSQL e a mesma fila, incluindo o cenário `100 − 80 − 80`.
 
-Os testes unitários exercitam regras de domínio em memória e os de integração
-exercitam o mecanismo de persistência. Nenhum deles demonstra atomicidade
-financeira orquestrada, concorrência ou replay idempotente. As constraints de
-unicidade persistente já são testadas; os fluxos operacionais serão cobertos
-nas etapas seguintes.
+Se a suíte de integração falhar ao conectar, confira nesta ordem: o engine do
+Docker está em execução; `docker compose --profile test ps` mostra
+`postgres-test` e `localstack-test` como `healthy`; as portas `55433` e `4567`
+estão livres; e `curl http://localhost:3000/health/ready` responde `200` com as
+duas dependências em `ok`.
+
+Os cenários de concorrência rodam com paralelismo real contra PostgreSQL: a
+mesma aposta enviada 50 vezes produzindo um único débito, duas apostas de
+`80.00` sobre `100.00` deixando saldo `20.00` e um débito, reversões duplicadas
+simultâneas, chaves de idempotência divergentes em corrida, identidade externa
+repetida e criação concorrente da mesma wallet.
+
+A validação com **três instâncias** roda em processos separados de verdade, cada
+um com pool de conexões, cliente SQS e memória próprios, apontando para o mesmo
+PostgreSQL e a mesma fila. A recuperação após queda entre o commit e o `ACK`
+também está coberta.
+
+Os testes de observabilidade cobrem a exposição de `/metrics`, a presença de
+todas as métricas exigidas, a contagem por status e transporte, duplicatas nos
+dois níveis, retries por componente, mensagens permanentes, espera de lock, lag
+da Outbox, divergência de reconciliação e a ausência de valor monetário nos
+logs estruturados.
+
+O que continua fora do escopo é a stack de coleta — não há container do
+Prometheus nem painel no Compose. A publicação de eventos é *at-least-once* por
+desenho: um consumidor externo deve deduplicar pelo `eventId`, que é estável
+desde a transação financeira.
