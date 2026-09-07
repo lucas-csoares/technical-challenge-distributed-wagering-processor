@@ -525,9 +525,10 @@ persistidos e publicados no evento `WagerTransactionRejected`.
 | `REFERENCE_ALREADY_REVERSED` | referência já revertida pelo mesmo tipo de operação |
 | `REFERENCE_NOT_FOUND` | referência nunca chegou e as tentativas se esgotaram |
 
-A taxonomia cobre apenas regras já implementadas. Falta ao menos o código de
-conflito de idempotência, que pertence ao contrato da camada externa. Mensagens
-descritivas podem complementar o código, mas não são o contrato.
+A taxonomia cobre as rejeições de negócio. O conflito de idempotência pertence
+ao contrato da camada externa: o filtro HTTP retorna `409` com o código
+`IDEMPOTENCY_CONFLICT`. Mensagens descritivas podem complementar o código, mas
+não são o contrato.
 
 #### `REJECTED` e `FAILED` são categorias disjuntas
 
@@ -616,7 +617,8 @@ ordem já é uma decisão consciente dentro da transação financeira.
 Cada operação trabalha em um contexto isolado, sem contexto global compartilhado
 entre requisições ou workers. A porta abstrata `FinancialTransactionManager`
 abre uma transação explícita e entrega um `FinancialTransactionScope` com os
-três repositories vinculados ao mesmo `EntityManager` transacional. O escopo é
+cinco repositories (wallet, transação, ledger, Inbox e Outbox) vinculados ao
+mesmo `EntityManager` transacional. O escopo é
 invalidado ao sair do callback, impedindo uso fora de uma transação. MikroORM,
 `EntityManager` e `LockMode` não atravessam a porta.
 
