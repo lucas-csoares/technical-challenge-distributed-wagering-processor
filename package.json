@@ -1,0 +1,46 @@
+{
+  "name": "distributed-wagering-processor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": ">=1.4.2 <2"
+  },
+  "scripts": {
+    "dev": "bun --watch src/main.ts",
+    "start": "bun src/main.ts",
+    "start:prod": "bun dist/main.js",
+    "build": "bun --bun tsc -p tsconfig.build.json",
+    "typecheck": "bun --bun tsc --noEmit",
+    "lint": "bun --bun eslint . --max-warnings 0",
+    "test": "bun test",
+    "test:unit": "bun test test/unit test/database.config.test.ts",
+    "test:integration": "bun test test/integration test/bootstrap.test.ts",
+    "migration:create": "bun --bun mikro-orm migration:create --config src/infrastructure/persistence/mikro-orm.config.ts",
+    "migration:up": "bun --bun mikro-orm migration:up --config src/infrastructure/persistence/mikro-orm.config.ts",
+    "migration:down": "bun --bun mikro-orm migration:down --config src/infrastructure/persistence/mikro-orm.config.ts",
+    "migration:list": "bun --bun mikro-orm migration:list --config src/infrastructure/persistence/mikro-orm.config.ts",
+    "migration:pending": "bun --bun mikro-orm migration:pending --config src/infrastructure/persistence/mikro-orm.config.ts"
+  },
+  "dependencies": {
+    "@mikro-orm/core": "7.1.15",
+    "@mikro-orm/migrations": "7.1.15",
+    "@mikro-orm/nestjs": "7.1.0",
+    "@mikro-orm/postgresql": "7.1.15",
+    "@nestjs/common": "12.0.1",
+    "@nestjs/core": "12.0.1",
+    "@nestjs/platform-express": "12.0.1",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@mikro-orm/cli": "7.1.15",
+    "@types/bun": "1.4.1",
+    "@types/pg": "8.23.1",
+    "eslint": "10.10.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.69.0"
+  }
+}
