@@ -6,7 +6,10 @@ import { FinancialTransactionManager } from './ports/financial-transaction-manag
 import { WalletAlreadyExistsError } from './financial-errors.js';
 import { isUniqueConstraint } from './ports/persistence-error.js';
 
-export interface CreateWalletCommand { readonly playerId: string; readonly initialBalance: MoneyProps; }
+export interface CreateWalletCommand {
+  readonly playerId: string;
+  readonly initialBalance: MoneyProps;
+}
 
 /** Descreve a wallet recém-criada por inteiro, para que o transporte não releia o banco. */
 export interface CreateWalletResult {
@@ -15,33 +18,81 @@ export interface CreateWalletResult {
   readonly balance: MoneyProps;
   readonly version: number;
 }
-export interface UseCaseRuntime { readonly now?: () => Date; readonly newId?: () => string; }
+export interface UseCaseRuntime {
+  readonly now?: () => Date;
+  readonly newId?: () => string;
+}
 
 export class CreateWalletUseCase {
-  constructor(private readonly transactions: FinancialTransactionManager, private readonly runtime: UseCaseRuntime = {}) {}
+  constructor(
+    private readonly transactions: FinancialTransactionManager,
+    private readonly runtime: UseCaseRuntime = {},
+  ) {}
+
   async execute(command: CreateWalletCommand): Promise<CreateWalletResult> {
-    const money = Money.from(command.initialBalance); const now = this.now(); const id = this.id;
-    try { return await this.transactions.execute(async (scope) => {
-      if (await scope.wallets.findByPlayerAndCurrency(command.playerId, money.currency)) throw new WalletAlreadyExistsError();
-      const opening = Wallet.open({ id: id(), playerId: command.playerId, initialBalance: money, openedAt: now });
-      await scope.wallets.save(opening.wallet);
-      if (opening.movement) {
-        const transaction = WagerTransaction.createOpening({ id: id(), walletId: opening.wallet.id, playerId: command.playerId, money, createdAt: now });
-        transaction.markProcessed(undefined, now); transaction.recordResultBalance(opening.wallet.balance);
-        await scope.transactions.save(transaction);
-        await scope.ledger.append(WalletLedgerEntry.create({ id: id(), transactionId: transaction.id, createdAt: now, ...opening.movement }));
+    const initialBalance = Money.from(command.initialBalance);
+    const openedAt = this.now();
+    const newId = this.newId;
+
+    try {
+      return await this.transactions.execute(async (scope) => {
+        const existingWallet = await scope.wallets.findByPlayerAndCurrency(
+          command.playerId,
+          initialBalance.currency,
+        );
+
+        if (existingWallet !== undefined) {
+          throw new WalletAlreadyExistsError();
+        }
+
+        const opening = Wallet.open({
+          id: newId(),
+          playerId: command.playerId,
+          initialBalance,
+          openedAt,
+        });
+        await scope.wallets.save(opening.wallet);
+
+        if (opening.movement !== undefined) {
+          const transaction = WagerTransaction.createOpening({
+            id: newId(),
+            walletId: opening.wallet.id,
+            playerId: command.playerId,
+            money: initialBalance,
+            createdAt: openedAt,
+          });
+
+          transaction.markProcessed(undefined, openedAt);
+          transaction.recordResultBalance(opening.wallet.balance);
+          await scope.transactions.save(transaction);
+          await scope.ledger.append(
+            WalletLedgerEntry.create({
+              id: newId(),
+              transactionId: transaction.id,
+              createdAt: openedAt,
+              ...opening.movement,
+            }),
+          );
+        }
+
+        return {
+          walletId: opening.wallet.id,
+          playerId: opening.wallet.playerId,
+          balance: opening.wallet.balance.toJSON(),
+          version: opening.wallet.version,
+        };
+      });
+    } catch (error) {
+      if (isUniqueConstraint(error, 'wallets_player_currency_unique')) {
+        throw new WalletAlreadyExistsError();
       }
-      return {
-        walletId: opening.wallet.id,
-        playerId: opening.wallet.playerId,
-        balance: opening.wallet.balance.toJSON(),
-        version: opening.wallet.version,
-      };
-    }); } catch (error) {
-      if (isUniqueConstraint(error, 'wallets_player_currency_unique')) throw new WalletAlreadyExistsError();
+
       throw error;
     }
   }
+
   private now = (): Date => (this.runtime.now ?? (() => new Date()))();
-  private get id(): () => string { return this.runtime.newId ?? (() => crypto.randomUUID()); }
+  private get newId(): () => string {
+    return this.runtime.newId ?? (() => crypto.randomUUID());
+  }
 }
