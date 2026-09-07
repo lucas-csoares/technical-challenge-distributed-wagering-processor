@@ -364,11 +364,9 @@ describe('wager transactions', () => {
     expect(rejection).toContain('wager_transactions_wallet_fkey');
   });
 
-  test('recusa uma transaÃ§Ã£o em moeda diferente da wallet', async () => {
+  test('preserva moeda divergente para rejeição auditável na aplicação', async () => {
     const walletId = await freshWallet('100.00', 'BRL');
-    const rejection = await rejectTransaction({ id: unique('tx'), walletId, currency: 'USD' });
-
-    expect(rejection).toContain('wager_transactions_wallet_fkey');
+    await insertTransaction({ id: unique('tx'), walletId, currency: 'USD', status: WagerTransactionStatus.Rejected, failureCode: 'CURRENCY_MISMATCH' });
   });
 
   test('recusa referÃªncia interna inexistente', async () => {
@@ -886,7 +884,7 @@ describe('imutabilidade do ledger', () => {
     ]);
 
     expect(rejection).toContain('violates RESTRICT setting of foreign key constraint');
-    expect(rejection).toContain('wager_transactions_wallet_fkey');
+    expect(rejection).toContain('wallet_ledger_entries_wallet_fkey');
   });
 
   test('uma transaÃ§Ã£o com lanÃ§amento nÃ£o pode ser removida', async () => {

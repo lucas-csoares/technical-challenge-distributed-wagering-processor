@@ -30,6 +30,10 @@ export function toWagerTransactionRecord(
   record.failureCode = toNull(transaction.failureCode);
   record.createdAt = transaction.createdAt;
   record.processedAt = toNull(transaction.processedAt);
+  record.resultBalance = transaction.resultBalance === undefined ? null : transaction.resultBalance.toString();
+  record.resultCurrency = transaction.resultBalance === undefined ? null : transaction.resultBalance.currency;
+  record.referenceAttempts = transaction.referenceAttempts;
+  record.nextReferenceAttemptAt = toNull(transaction.nextReferenceAttemptAt);
 
   return record;
 }
@@ -54,5 +58,8 @@ export function toWagerTransaction(record: WagerTransactionRecord): WagerTransac
     referenceTransactionId: toUndefined(record.referenceTransactionId),
     failureCode: toUndefined(record.failureCode) as PersistedFailureCode | undefined,
     processedAt: toUndefined(record.processedAt),
+    resultBalance: record.resultBalance === null ? undefined : Money.from({ amount: record.resultBalance, currency: record.resultCurrency ?? record.currency }),
+    referenceAttempts: record.referenceAttempts,
+    nextReferenceAttemptAt: toUndefined(record.nextReferenceAttemptAt),
   });
 }

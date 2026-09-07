@@ -99,6 +99,9 @@ export interface WagerTransactionState {
   readonly referenceTransactionId: string | undefined;
   readonly failureCode: PersistedFailureCode | undefined;
   readonly processedAt: Date | undefined;
+  readonly resultBalance?: Money | undefined;
+  readonly referenceAttempts?: number;
+  readonly nextReferenceAttemptAt?: Date | undefined;
 }
 
 /**
@@ -138,6 +141,9 @@ export class WagerTransaction {
     private _referenceTransactionId: string | undefined,
     private _failureCode: PersistedFailureCode | undefined,
     private _processedAt: Date | undefined,
+    private _resultBalance: Money | undefined,
+    private _referenceAttempts: number,
+    private _nextReferenceAttemptAt: Date | undefined,
   ) {}
 
   /** Nasce em `PENDING`. Recusa `OPENING` e valida a exigência de referência. */
@@ -193,6 +199,9 @@ export class WagerTransaction {
       undefined,
       undefined,
       undefined,
+      undefined,
+      0,
+      undefined,
     );
   }
 
@@ -229,6 +238,9 @@ export class WagerTransaction {
       undefined,
       undefined,
       undefined,
+      undefined,
+      0,
+      undefined,
     );
   }
 
@@ -252,6 +264,9 @@ export class WagerTransaction {
       state.referenceTransactionId,
       state.failureCode,
       state.processedAt === undefined ? undefined : cloneInstant(state.processedAt),
+      state.resultBalance,
+      state.referenceAttempts ?? 0,
+      state.nextReferenceAttemptAt,
     );
   }
 
@@ -273,6 +288,57 @@ export class WagerTransaction {
 
   get processedAt(): Date | undefined {
     return this._processedAt === undefined ? undefined : cloneInstant(this._processedAt);
+  }
+
+  /** Saldo devolvido ao provedor no instante em que este comando foi decidido. */
+  get resultBalance(): Money | undefined {
+    return this._resultBalance;
+  }
+
+  get referenceAttempts(): number {
+    return this._referenceAttempts;
+  }
+
+  get nextReferenceAttemptAt(): Date | undefined {
+    return this._nextReferenceAttemptAt === undefined
+      ? undefined
+      : cloneInstant(this._nextReferenceAttemptAt);
+  }
+
+  /**
+   * Agenda a próxima reavaliação de uma pendência.
+   *
+   * O contador vive na linha, não em memória do worker: uma instância que caia
+   * não zera as tentativas já gastas nem faz outra recomeçar do início.
+   */
+  scheduleReferenceRetry(attempts: number, nextAttemptAt: Date | undefined): void {
+    if (this._status !== WagerTransactionStatus.PendingReference) {
+      throw new InvalidInputError('Only a PENDING_REFERENCE transaction schedules a retry.');
+    }
+
+    if (attempts < 0) {
+      throw new InvalidInputError('referenceAttempts must not be negative.');
+    }
+
+    this._referenceAttempts = attempts;
+    this._nextReferenceAttemptAt =
+      nextAttemptAt === undefined ? undefined : toInstant(nextAttemptAt, 'nextAttemptAt');
+  }
+
+  isPendingReference(): boolean {
+    return this._status === WagerTransactionStatus.PendingReference;
+  }
+
+  /** Zera o agendamento quando a pendência chega a um estado terminal. */
+  clearReferenceRetry(): void {
+    this._nextReferenceAttemptAt = undefined;
+  }
+
+  recordResultBalance(balance: Money): void {
+    if (balance.isNegative()) {
+      throw new InvalidInputError('resultBalance must be non-negative.');
+    }
+    this._resultBalance = balance;
   }
 
   /**
@@ -318,8 +384,8 @@ export class WagerTransaction {
       );
     }
 
-    if (!this.requiresReference()) {
-      throw new InvalidInputError(`${this.kind} never waits for a reference.`);
+    if (this.referenceExternalTransactionId === undefined) {
+      throw new InvalidInputError(`${this.kind} was submitted without a reference.`);
     }
 
     this._status = WagerTransactionStatus.PendingReference;

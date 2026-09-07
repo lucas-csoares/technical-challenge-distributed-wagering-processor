@@ -28,6 +28,10 @@ export class WagerTransactionRecord {
   failureCode!: string | null;
   createdAt!: Date;
   processedAt!: Date | null;
+  resultBalance!: string | null;
+  referenceAttempts!: number;
+  nextReferenceAttemptAt!: Date | null;
+  resultCurrency!: string | null;
 }
 
 export const wagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
@@ -71,6 +75,16 @@ export const wagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
       columnType: 'timestamptz',
       nullable: true,
       fieldName: 'processed_at',
+    },
+    // Nullable porque linhas legadas não tinham snapshot; o mapper valida as novas leituras com Money.
+    resultBalance: { type: 'string', columnType: MONEY_COLUMN_TYPE, nullable: true, fieldName: 'result_balance' },
+    resultCurrency: { type: 'string', length: 3, nullable: true, fieldName: 'result_currency' },
+    referenceAttempts: { type: 'integer', fieldName: 'reference_attempts' },
+    nextReferenceAttemptAt: {
+      type: 'datetime',
+      columnType: 'timestamptz',
+      nullable: true,
+      fieldName: 'next_reference_attempt_at',
     },
   },
 });
